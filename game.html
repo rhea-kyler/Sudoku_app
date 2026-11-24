@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  * { box-sizing: border-box; user-select: none; -webkit-tap-highlight-color: transparent; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  body { margin: 0; padding: 0; background: transparent; display: flex; flex-direction: column; align-items: center; color: #1e293b; }
+  .status-bar { width: 100%; max-width: 440px; display: flex; justify-content: space-between; padding: 6px 4px 10px; font-size: 14px; font-weight: 600; color: #64748b; }
+  .status-item span { color: #0f172a; font-weight: 700; }
+  .board { width: 100%; max-width: 440px; aspect-ratio: 1/1; display: grid; grid-template-columns: repeat(9, 1fr); grid-template-rows: repeat(9, 1fr); border: 2.5px solid #1e293b; background: #fff; border-radius: 6px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+  .cell { border-right: 1px solid #cbd5e1; border-bottom: 1px solid #cbd5e1; display: flex; justify-content: center; align-items: center; font-size: clamp(18px, 5vw, 24px); font-weight: 500; cursor: pointer; }
+  .cell:nth-child(3n) { border-right: 2px solid #1e293b; }
+  .cell:nth-child(9n) { border-right: none; }
+  .row-border { border-bottom: 2px solid #1e293b !important; }
+  .cell.fixed { color: #0f172a; font-weight: 600; }
+  .cell.user-val { color: #2563eb; }
+  .cell.error-val { color: #dc2626 !important; background: #fee2e2 !important; }
+  .cell.highlight-area { background: #f1f5f9; }
+  .cell.highlight-same { background: #cbd5e1; font-weight: 700; }
+  .cell.selected { background: #bfdbfe !important; }
+  .notes-grid { display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); width: 100%; height: 100%; padding: 2px; }
+  .note-num { font-size: clamp(8px, 2.1vw, 10px); color: #64748b; display: flex; justify-content: center; align-items: center; }
+  .tools { width: 100%; max-width: 440px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 14px; }
+  .tool-btn { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 8px 4px; display: flex; flex-direction: column; align-items: center; cursor: pointer; color: #334155; font-size: 12px; font-weight: 600; position: relative; }
+  .tool-btn.active { background: #eff6ff; border-color: #3b82f6; color: #2563eb; }
+  .tool-icon { font-size: 18px; margin-bottom: 2px; }
+  .badge { position: absolute; top: -5px; right: -4px; background: #2563eb; color: #fff; font-size: 10px; padding: 2px 6px; border-radius: 10px; font-weight: 700; }
+  .numpad { width: 100%; max-width: 440px; display: grid; grid-template-columns: repeat(9, 1fr); gap: 5px; margin-top: 12px; }
+  .num-btn { background: #eff6ff; border: 1px solid #dbeafe; border-radius: 8px; padding: 10px 0; display: flex; flex-direction: column; align-items: center; cursor: pointer; color: #1d4ed8; }
+  .num-btn.completed { opacity: 0.25; pointer-events: none; }
+  .num-main { font-size: 20px; font-weight: 700; line-height: 1.1; }
+  .num-rem { font-size: 10px; color: #64748b; margin-top: 2px; }
+  .overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.85); display: none; flex-direction: column; justify-content: center; align-items: center; color: #fff; text-align: center; border-radius: 8px; z-index: 50; padding: 20px; }
+  .overlay button { background: #3b82f6; color: #fff; border: none; padding: 10px 24px; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 12px; }
+</style>
+</head>
+<body>
+  <div class="status-bar">
+    <div class="status-item">Kesalahan: <span id="mistakes">0/3</span></div>
+    <div class="status-item">Level: <span>__DIFFICULTY__</span></div>
+    <div class="status-item">Waktu: <span id="timer">00:00</span></div>
+  </div>
+  <div style="position: relative; width: 100%; max-width: 440px;">
+    <div class="board" id="board"></div>
+    <div class="overlay" id="overlay">
+      <h2 id="overlay-title" style="margin:0;">Game Over</h2>
+      <p id="overlay-desc" style="color:#cbd5e1;">Anda telah membuat 3 kesalahan.</p>
+      <button onclick="resetCurrentGame()">Main Ulang Papan Ini</button>
+    </div>
+  </div>
+  <div class="tools">
+    <div class="tool-btn" onclick="undoMove()"><span class="tool-icon">↩️</span><span>Undo</span></div>
+    <div class="tool-btn" onclick="eraseCell()"><span class="tool-icon">🧹</span><span>Hapus</span></div>
+    <div class="tool-btn" id="note-btn" onclick="toggleNoteMode()"><span class="badge" id="note-badge">OFF</span><span class="tool-icon">✏️</span><span>Catatan</span></div>
+    <div class="tool-btn" onclick="useHint()"><span class="badge" id="hint-badge">3</span><span class="tool-icon">💡</span><span>Hint</span></div>
+  </div>
+  <div class="numpad" id="numpad"></div>
+<script>
+  const initialPuzzle = __PUZZLE_JSON__;
+  const solution = __SOLUTION_JSON__;
+  let board = JSON.parse(JSON.stringify(initialPuzzle));
+  let notes = Array.from({length: 9}, () => Array.from({length: 9}, () => new Set()));
+  let history = [], selected = {r: 4, c: 4}, noteMode = false, mistakes = 0, hintsLeft = 3, seconds = 0, isGameOver = false;
+
+  setInterval(() => {
+    if (!isGameOver) {
+      seconds++;
+      document.getElementById('timer').innerText = String(Math.floor(seconds/60)).padStart(2,'0') + ':' + String(seconds%60).padStart(2,'0');
+    }
+  }, 1000);
+
+  function saveHistory() { history.push({ board: JSON.parse(JSON.stringify(board)), notes: notes.map(r => r.map(s => Array.from(s))) }); }
+  function undoMove() { if (!history.length || isGameOver) return; const p = history.pop(); board = p.board; notes = p.notes.map(r => r.map(a => new Set(a))); render(); }
+  function toggleNoteMode() { noteMode = !noteMode; document.getElementById('note-btn').classList.toggle('active', noteMode); document.getElementById('note-badge').innerText = noteMode ? 'ON' : 'OFF'; }
+  function eraseCell() { const {r, c} = selected; if (isGameOver || initialPuzzle[r][c] !== 0) return; if (board[r][c] !== 0 || notes[r][c].size > 0) { saveHistory(); board[r][c] = 0; notes[r][c].clear(); render(); } }
+
+  function useHint() {
+    const {r, c} = selected;
+    if (isGameOver || hintsLeft <= 0 || board[r][c] === solution[r][c]) return;
+    saveHistory(); hintsLeft--; document.getElementById('hint-badge').innerText = hintsLeft;
+    board[r][c] = solution[r][c]; notes[r][c].clear(); clearRelatedNotes(r, c, solution[r][c]); render(); checkWin();
+  }
+
+  function clearRelatedNotes(r, c, num) {
+    for (let i = 0; i < 9; i++) { notes[r][i].delete(num); notes[i][c].delete(num); }
+    const sr = Math.floor(r/3)*3, sc = Math.floor(c/3)*3;
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) notes[sr+i][sc+j].delete(num);
+  }
+
+  function inputNumber(num) {
+    const {r, c} = selected;
+    if (isGameOver || initialPuzzle[r][c] !== 0 || board[r][c] === solution[r][c]) return;
+    saveHistory();
+    if (noteMode) { board[r][c] = 0; notes[r][c].has(num) ? notes[r][c].delete(num) : notes[r][c].add(num); }
+    else {
+      board[r][c] = num; notes[r][c].clear();
+      if (num !== solution[r][c]) { mistakes++; document.getElementById('mistakes').innerText = mistakes + '/3'; if (mistakes >= 3) triggerGameOver(false); }
+      else { clearRelatedNotes(r, c, num); checkWin(); }
+    }
+    render();
+  }
+
+  function checkWin() {
+    for (let r = 0; r < 9; r++) for (let c = 0; c < 9; c++) if (board[r][c] !== solution[r][c]) return;
+    triggerGameOver(true);
+  }
+
+  function triggerGameOver(win) {
+    isGameOver = true; document.getElementById('overlay').style.display = 'flex';
+    document.getElementById('overlay-title').innerText = win ? '🎉 Luar Biasa!' : '💥 Game Over';
+    document.getElementById('overlay-desc').innerText = win ? 'Selesai dalam ' + document.getElementById('timer').innerText + ' (' + mistakes + ' salah).' : 'Anda sudah melakukan 3 kali kesalahan.';
+  }
+
+  function resetCurrentGame() {
+    board = JSON.parse(JSON.stringify(initialPuzzle)); notes = Array.from({length: 9}, () => Array.from({length: 9}, () => new Set()));
+    history = []; mistakes = 0; hintsLeft = 3; seconds = 0; isGameOver = false;
+    document.getElementById('mistakes').innerText = '0/3'; document.getElementById('hint-badge').innerText = '3';
+    document.getElementById('timer').innerText = '00:00'; document.getElementById('overlay').style.display = 'none'; render();
+  }
+
+  function render() {
+    const boardEl = document.getElementById('board'); boardEl.innerHTML = '';
+    const selVal = board[selected.r][selected.c], sBoxR = Math.floor(selected.r/3), sBoxC = Math.floor(selected.c/3);
+    let counts = Array(10).fill(0);
+    for (let r = 0; r < 9; r++) for (let c = 0; c < 9; c++) if (board[r][c] === solution[r][c]) counts[board[r][c]]++;
+
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        const cell = document.createElement('div'); cell.className = 'cell' + ((r===2||r===5) ? ' row-border' : '');
+        const val = board[r][c];
+        if (r === selected.r && c === selected.c) cell.classList.add('selected');
+        else if (selVal !== 0 && val === selVal) cell.classList.add('highlight-same');
+        else if (r === selected.r || c === selected.c || (Math.floor(r/3)===sBoxR && Math.floor(c/3)===sBoxC)) cell.classList.add('highlight-area');
+
+        if (val !== 0) {
+          cell.innerText = val;
+          cell.classList.add(initialPuzzle[r][c] !== 0 ? 'fixed' : 'user-val');
+          if (initialPuzzle[r][c] === 0 && val !== solution[r][c]) cell.classList.add('error-val');
+        } else if (notes[r][c].size > 0) {
+          const nGrid = document.createElement('div'); nGrid.className = 'notes-grid';
+          for (let n = 1; n <= 9; n++) { const nEl = document.createElement('div'); nEl.className = 'note-num'; nEl.innerText = notes[r][c].has(n) ? n : ''; nGrid.appendChild(nEl); }
+          cell.appendChild(nGrid);
+        }
+        cell.onclick = () => { selected = {r, c}; render(); };
+        boardEl.appendChild(cell);
+      }
+    }
+    const numpadEl = document.getElementById('numpad'); numpadEl.innerHTML = '';
+    for (let n = 1; n <= 9; n++) {
+      const rem = 9 - counts[n], btn = document.createElement('div');
+      btn.className = 'num-btn' + (rem <= 0 ? ' completed' : '');
+      btn.innerHTML = '<span class="num-main">' + n + '</span><span class="num-rem">' + (rem > 0 ? rem : '') + '</span>';
+      btn.onclick = () => inputNumber(n); numpadEl.appendChild(btn);
+    }
+  }
+  render();
+</script>
+</body>
+</html>
